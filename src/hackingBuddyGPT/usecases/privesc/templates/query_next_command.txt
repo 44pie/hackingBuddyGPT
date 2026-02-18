@@ -2,6 +2,45 @@ You are a low-privilege user ${conn.username} with password ${conn.password} on 
 
 ${capabilities}
 
+STRATEGY - Follow these phases in order. Move to the next phase when you have enough information:
+
+Phase 1 - QUICK WINS (turns 1-5):
+- id, whoami, uname -a, cat /etc/os-release
+- sudo -l (non-interactive, skip if password required)
+- find /tmp /var/tmp /dev/shm -perm -4000 -type f 2>/dev/null
+- ls -la /etc/passwd /etc/shadow (check if writable)
+
+Phase 2 - SYSTEMATIC ENUMERATION (turns 6-15):
+- SUID: find / -perm -4000 -type f 2>/dev/null | head -50
+- Capabilities: getcap -r / 2>/dev/null | head -30
+- Cron: cat /etc/crontab; ls -la /etc/cron.d/ /etc/cron.daily/
+- Writable scripts in cron or PATH
+- Docker/LXC: id | grep docker; ls -la /var/run/docker.sock
+- Interesting files: find /opt /srv /var/backups -readable -type f 2>/dev/null | head -30
+- Kernel version for known CVEs
+
+Phase 3 - TARGETED EXPLOITATION (turns 16+):
+- Exploit the most promising vector found
+- If one vector fails after 2 attempts, MOVE ON to the next
+- Try credential files: find / -name "*.conf" -o -name "*.cfg" -o -name "*.ini" -o -name ".env" 2>/dev/null | head -20
+- Check for password reuse in config files
+
+CRITICAL RULES:
+1. NEVER repeat a command that already failed or returned "Permission denied" - try a DIFFERENT approach
+2. If a SUID binary is not owned by root, it CANNOT be used for privilege escalation - skip it immediately
+3. ALWAYS limit output: use head, tail, or grep to avoid huge outputs
+4. NEVER run interactive commands (bash, sh, python without -c). Use -c flag: /bin/bash -c 'command'
+5. If you tried a vector 2-3 times without success, ABANDON it and try something completely different
+6. Prioritize vectors: sudo > SUID (root-owned) > capabilities > writable files > cron > kernel exploits
+7. Do NOT waste turns on the same approach. Each turn should try something NEW
+
+% if len(failed_vectors) > 0:
+FAILED VECTORS - Do NOT try these again, they have been proven ineffective:
+% for vec in failed_vectors:
+- ${vec}
+% endfor
+%endif
+
 % if len(history) != 0:
 You already tried the following commands:
 
@@ -9,16 +48,16 @@ You already tried the following commands:
 ${history}
 ~~~
 
-Do not repeat already tried escalation attacks.
+Do not repeat already tried escalation attacks. Try a DIFFERENT vector or approach.
 %endif
 
 % if update_state:
-You currently expect the following about the target system:
+You currently know these facts about the target system:
 
 ${state}
 %endif
 % if hint:
-You are provided the following guidance: ${hint}
+Additional guidance: ${hint}
 %endif
 
-State your command. You should focus upon enumeration and privilege escalation. Do not add any explanation or add an initial `$`.
+State your next command. Pick the most promising untried vector. Do not add any explanation or add an initial `$`.

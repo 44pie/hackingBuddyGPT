@@ -8,5 +8,12 @@ You executed the command '${cmd}' and retrieved the following result:
 ${resp}
 ~~~
 
-Create a new list of facts that unifies the current list of facts as
-well as new information that you were able to retrieve from the executed command. Try to keep the list of new facts as concise as possible.
+Create a new list of facts that unifies the current list of facts as well as new information from the executed command. Organize the facts into these categories:
+
+1. SYSTEM INFO: OS, kernel, architecture, user, groups
+2. PROMISING VECTORS: Vectors that might work (with priority: high/medium/low)
+3. FAILED VECTORS: Approaches that have been tried and failed - DO NOT try these again
+4. CREDENTIALS FOUND: Any passwords, keys, tokens discovered
+5. NEXT STEPS: What to try next based on findings
+
+Keep each fact concise (one line). Remove duplicate or outdated facts. Mark vectors as FAILED if they returned "Permission denied" or similar errors.

@@ -32,18 +32,39 @@ class OpenAIConnection(LLM):
     api_backoff: int = parameter(desc="Backoff time in seconds when running into rate-limits", default=60)
     api_retries: int = parameter(desc="Number of retries when running into rate-limits", default=3)
 
-    def get_response(self, prompt, *, retry: int = 0,azure_retry: int = 0, **kwargs) -> LLMResult:
-        if retry >= self.api_retries:
+    def _trim_prompt(self, prompt: str, factor: float) -> str:
+        target_len = int(len(prompt) * factor)
+        if target_len >= len(prompt):
+            return prompt
+        header_size = min(2000, len(prompt) // 4)
+        tail_size = target_len - header_size - 50
+        if tail_size < 500:
+            tail_size = 500
+            header_size = target_len - tail_size - 50
+        if header_size < 200:
+            header_size = 200
+        header = prompt[:header_size]
+        tail = prompt[len(prompt) - tail_size:]
+        trimmed = header + "\n\n...[history trimmed due to size limits]...\n\n" + tail
+        print(f"[RestAPI-Connector] Trimmed prompt from {len(prompt)} to {len(trimmed)} chars (factor={factor:.0%})")
+        return trimmed
+
+    def get_response(self, prompt, *, retry: int = 0, azure_retry: int = 0, _original_prompt: str = None, _trim_factor: float = 1.0, **kwargs) -> LLMResult:
+        if retry >= self.api_retries + 2:
             raise Exception("Failed to get response from OpenAI API")
 
         if hasattr(prompt, "render"):
             prompt = prompt.render(**kwargs)
 
+        if _original_prompt is None:
+            _original_prompt = prompt
+
+        if _trim_factor < 1.0:
+            prompt = self._trim_prompt(_original_prompt, _trim_factor)
+
         if urlparse(self.api_url).hostname and urlparse(self.api_url).hostname.endswith(".azure.com"):
-            # azure ai header
             headers = {"api-key": f"{self.api_key}"}
         else:
-            # normal header
             headers = {"Authorization": f"Bearer {self.api_key}"}
 
         data = {"model": self.model, "messages": [{"role": "user", "content": prompt}]}
@@ -55,12 +76,17 @@ class OpenAIConnection(LLM):
             if response.status_code == 429:
                 print(f"[RestAPI-Connector] running into rate-limits, waiting for {self.api_backoff} seconds")
                 time.sleep(self.api_backoff)
-                return self.get_response(prompt, retry=retry + 1)
+                return self.get_response(prompt, retry=retry + 1, _original_prompt=_original_prompt, _trim_factor=_trim_factor)
+
+            if response.status_code == 413:
+                new_factor = _trim_factor * 0.5
+                print(f"[RestAPI-Connector] Payload too large (413), trimming to {new_factor:.0%} and retrying...")
+                return self.get_response(prompt, retry=0, _original_prompt=_original_prompt, _trim_factor=new_factor)
 
             if response.status_code == 408:
                 if azure_retry < self.api_retries:
                     print("Received 408 Status Code, trying again.")
-                    return self.get_response(prompt, azure_retry = azure_retry + 1)
+                    return self.get_response(prompt, azure_retry=azure_retry + 1, _original_prompt=_original_prompt, _trim_factor=_trim_factor)
                 else:
                     raise Exception(f"Error from Gateway ({response.status_code})")
 
