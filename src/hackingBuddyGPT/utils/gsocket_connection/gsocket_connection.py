@@ -48,16 +48,22 @@ class GsocketConnection:
             out = self._process.stdout.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"gs-netcat failed to start: {out}")
 
-        self._drain_initial_output()
+        self._drain_output(3.0)
 
-    def _drain_initial_output(self):
+        sync_marker = f"__GSINIT_{uuid.uuid4().hex[:12]}__"
+        self._send(f"echo {sync_marker}")
+        self._read_until_marker_line(sync_marker, 10)
+        self._drain_output(0.5)
+
+    def _drain_output(self, wait_time: float = 1.0):
         while True:
-            ready, _, _ = select.select([self._process.stdout], [], [], 1.5)
+            ready, _, _ = select.select([self._process.stdout], [], [], wait_time)
             if not ready:
                 break
             data = self._read_available()
             if not data:
                 break
+            wait_time = 0.3
 
     def _read_available(self) -> bytes:
         fd = self._process.stdout.fileno()
@@ -78,7 +84,7 @@ class GsocketConnection:
         self._process.stdin.write((data + "\n").encode("utf-8"))
         self._process.stdin.flush()
 
-    def _read_until_marker(self, marker: str, timeout: int = None) -> Tuple[str, bool]:
+    def _read_until_marker_line(self, marker: str, timeout: int = None) -> Tuple[str, bool]:
         if timeout is None:
             timeout = self.timeout
         output = b""
@@ -94,8 +100,13 @@ class GsocketConnection:
                 chunk = os.read(fd, 65536)
                 if chunk:
                     output += chunk
-                    if marker_bytes in output:
-                        found = True
+                    lines = output.replace(b"\r\n", b"\n").replace(b"\r", b"\n").split(b"\n")
+                    for line in lines:
+                        stripped = line.strip()
+                        if stripped == marker_bytes:
+                            found = True
+                            break
+                    if found:
                         break
             if self._process.poll() is not None:
                 try:
@@ -115,13 +126,18 @@ class GsocketConnection:
         if not cmd.strip():
             return "", "", 0
 
-        end_marker = f"__GSEND_{uuid.uuid4().hex[:12]}__"
-        rc_marker = f"__GSRC_{uuid.uuid4().hex[:12]}__"
+        end_id = uuid.uuid4().hex[:12]
+        rc_id = uuid.uuid4().hex[:12]
+
+        end_marker = f"__GSEND_{end_id}__"
+        rc_marker = f"__GSRC_{rc_id}__"
 
         full_cmd = f"{cmd}; echo {rc_marker}$?{rc_marker}; echo {end_marker}"
         self._send(full_cmd)
 
-        raw_output, marker_found = self._read_until_marker(end_marker, self.timeout)
+        raw_output, marker_found = self._read_until_marker_line(end_marker, self.timeout)
+
+        raw_output = raw_output.replace("\r\n", "\n").replace("\r", "\n")
 
         lines = raw_output.split("\n")
         result_lines = []
@@ -131,23 +147,52 @@ class GsocketConnection:
         if not marker_found:
             stderr_text = f"TIMEOUT: end marker not found after {self.timeout}s, output may be incomplete"
             return_code = -1
+            self._process.stdin.write(b"\x03\n")
+            self._process.stdin.flush()
+            time.sleep(1)
+            self._drain_output(1.0)
+            sync = f"__GSYNC_{uuid.uuid4().hex[:12]}__"
+            self._send(f"echo {sync}")
+            self._read_until_marker_line(sync, 5)
+            self._drain_output(0.3)
 
+        cmd_stripped = full_cmd.strip()
+        collecting = False
         for line in lines:
-            if end_marker in line:
+            stripped = line.strip()
+            if stripped == end_marker:
                 break
-            if rc_marker in line:
-                rc_match = re.search(rf"{re.escape(rc_marker)}(\d+){re.escape(rc_marker)}", line)
+            if rc_marker in stripped:
+                rc_match = re.search(rf"{re.escape(rc_marker)}(\d+){re.escape(rc_marker)}", stripped)
                 if rc_match:
                     return_code = int(rc_match.group(1))
+                collecting = False
                 continue
-            if full_cmd.strip() in line.strip():
-                continue
-            result_lines.append(line)
+            if not collecting:
+                if cmd_stripped and cmd_stripped in stripped:
+                    collecting = True
+                    continue
+                if end_marker in stripped or rc_marker in stripped:
+                    continue
+                if "__GSEND_" in stripped or "__GSRC_" in stripped or "__GSINIT_" in stripped:
+                    continue
+                if stripped.endswith("$ " + cmd_stripped) or stripped.endswith("# " + cmd_stripped):
+                    collecting = True
+                    continue
+                if not stripped:
+                    continue
+                if any(frag in stripped for frag in ["; echo __GS", "__; echo __GS"]):
+                    continue
+                result_lines.append(line)
+            else:
+                result_lines.append(line)
 
         stdout = "\n".join(result_lines).strip()
 
         ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
         stdout = ansi_escape.sub("", stdout)
+
+        self._drain_output(0.2)
 
         return stdout, stderr_text, return_code
 
