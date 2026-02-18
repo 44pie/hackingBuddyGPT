@@ -149,8 +149,19 @@ class GsocketConnection:
             return_code = -1
             self._process.stdin.write(b"\x03\n")
             self._process.stdin.flush()
-            time.sleep(1)
-            self._drain_output(1.0)
+            time.sleep(0.5)
+            self._drain_output(0.5)
+
+            self._process.stdin.write(b"exit\n")
+            self._process.stdin.flush()
+            time.sleep(0.5)
+            self._drain_output(0.5)
+
+            self._process.stdin.write(b"exit\n")
+            self._process.stdin.flush()
+            time.sleep(0.5)
+            self._drain_output(0.5)
+
             sync = f"__GSYNC_{uuid.uuid4().hex[:12]}__"
             self._send(f"echo {sync}")
             self._read_until_marker_line(sync, 5)
